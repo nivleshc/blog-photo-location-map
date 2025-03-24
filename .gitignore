@@ -1,0 +1,7 @@
+# Misc
+.DS_Store
+
+# Terraform
+*.terraform
+.terraform.lock.hcl
+*terraform.tfstate*

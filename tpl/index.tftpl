@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Photo Location Map</title>
+    <!-- Load the Cognito Identity SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/amazon-cognito-identity-js@6.0.0/dist/amazon-cognito-identity.min.js"></script>
+    <!-- Load exif-js for extracting EXIF data -->
+    <script src="https://cdn.jsdelivr.net/npm/exif-js"></script>
+    <style>
+      body {
+        margin: 0;
+        font-family: Arial, sans-serif;
+        background: #f4f4f4;
+      }
+      /* Spinner overlay */
+      #spinner {
+        display: none;
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        z-index: 2000;
+      }
+      .loader {
+        border: 16px solid #f3f3f3;
+        border-top: 16px solid #3498db;
+        border-radius: 50%;
+        width: 120px;
+        height: 120px;
+        animation: spin 2s linear infinite;
+      }
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+      /* Top navigation buttons */
+      .top-buttons {
+        display: none;
+        background: #333;
+        padding: 10px;
+        text-align: center;
+      }
+      .top-buttons button {
+        background: #fff;
+        border: none;
+        padding: 10px 20px;
+        margin: 0 10px;
+        cursor: pointer;
+        border-radius: 5px;
+        font-size: 14px;
+      }
+      .top-buttons button:hover {
+        background: #ddd;
+      }
+      /* Login form container */
+      .login-container {
+        display: flex;
+        height: 100vh;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+      }
+      .header-text {
+        font-size: 32px;
+        font-weight: bold;
+        margin-bottom: 20px;
+      }
+      .login-box {
+        background: #fff;
+        padding: 30px;
+        border-radius: 8px;
+        box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        text-align: center;
+        max-width: 320px;
+        width: 100%;
+        position: relative;
+      }
+      .login-box h2 {
+        margin-bottom: 20px;
+        font-weight: normal;
+      }
+      .login-box label {
+        display: block;
+        margin-bottom: 5px;
+        font-size: 14px;
+        text-align: left;
+      }
+      .login-box input[type="text"],
+      .login-box input[type="password"] {
+        width: 100%;
+        padding: 12px;
+        margin-bottom: 10px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        font-size: 14px;
+        box-sizing: border-box;
+      }
+      /* Container to hold password field and eye icon */
+      .password-container {
+        position: relative;
+        margin-bottom: 10px;
+      }
+      .password-container input[type="password"],
+      .password-container input[type="text"] {
+        width: 100%;
+        padding-right: 40px; /* Extra space for the eye icon */
+      }
+      .password-container svg {
+        position: absolute;
+        right: 10px;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 20px;
+        height: 20px;
+        fill: #888;
+        cursor: pointer;
+      }
+      .login-box button {
+        width: 100%;
+        padding: 12px;
+        background: #007BFF;
+        color: #fff;
+        border: none;
+        border-radius: 4px;
+        font-size: 16px;
+        cursor: pointer;
+        box-sizing: border-box;
+      }
+      .login-box button:hover {
+        background: #0056b3;
+      }
+      .error-msg {
+        color: red;
+        font-size: 14px;
+        margin-bottom: 10px;
+        text-align: center;
+      }
+      /* Iframe styling */
+      #contentFrame {
+        width: 100%;
+        height: calc(100vh - 60px);
+        border: none;
+      }
+      /* Upload form modal */
+      #uploadForm {
+        display: none;
+        position: fixed;
+        top: 20%;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #fff;
+        padding: 20px;
+        z-index: 1000;
+        border-radius: 8px;
+        box-shadow: 0 0 10px rgba(0,0,0,0.3);
+        width: 300px;
+      }
+      #uploadForm h3 {
+        margin-top: 0;
+        text-align: center;
+      }
+      #uploadForm label {
+        font-size: 14px;
+        display: block;
+        margin-top: 10px;
+        text-align: left;
+      }
+      #uploadForm input[type="text"],
+      #uploadForm input[type="file"],
+      #uploadForm input[type="date"],
+      #uploadForm input[type="number"] {
+        width: 100%;
+        padding: 8px;
+        margin-top: 5px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        font-size: 14px;
+      }
+      #uploadForm button {
+        margin-top: 15px;
+        width: 48%;
+        padding: 10px;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 14px;
+      }
+      #uploadForm .submit-btn {
+        background: #28a745;
+        color: #fff;
+      }
+      #uploadForm .cancel-btn {
+        background: #dc3545;
+        color: #fff;
+      }
+      /* Modal overlay */
+      #modalOverlay {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 999;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Spinner -->
+    <div id="spinner">
+      <div class="loader"></div>
+    </div>
+
+    <!-- Top navigation buttons (hidden on login) -->
+    <div class="top-buttons" id="navButtons">
+      <button id="uploadBtn">Upload Photos</button>
+      <button id="regenBtn">Regenerate Map</button>
+      <button id="logoutBtn">Logout</button>
+    </div>
+
+    <!-- Login Screen -->
+    <div class="login-container" id="loginContainer">
+      <div class="header-text">Photo Location Map</div>
+      <div class="login-box">
+        <h2>Sign In</h2>
+        <!-- Error message placeholder -->
+        <div id="errorMsg" class="error-msg"></div>
+        <label for="username">Username</label>
+        <input type="text" id="username" placeholder="Enter your username">
+        <label for="password">Password</label>
+        <div class="password-container">
+          <input type="password" id="password" placeholder="Enter your password">
+          <!-- Eye icon using inline SVG -->
+          <svg id="togglePassword" viewBox="0 0 24 24">
+            <path d="M12 5C7 5 2.73 8.11 1 12c1.73 3.89 6 7 11 7s9.27-3.11 11-7c-1.73-3.89-6-7-11-7zm0 12c-2.76 0-5-2.24-5-5s2.24-5 5-5 
+                     5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>
+          </svg>
+        </div>
+        <button id="loginBtn">Login</button>
+      </div>
+    </div>
+
+    <!-- Iframe to display the retrieved content -->
+    <iframe id="contentFrame"></iframe>
+
+    <!-- Modal overlay for upload form -->
+    <div id="modalOverlay"></div>
+
+    <!-- Upload Form Modal (thumbnail link removed) -->
+    <div id="uploadForm">
+      <h3>Upload Photo</h3>
+      <label for="uploadFile">Select File</label>
+      <input type="file" id="uploadFile">
+      
+      <!-- The following fields will be auto-populated from EXIF data -->
+      <label for="dateTaken">Date Photo Taken</label>
+      <input type="date" id="dateTaken">
+      
+      <label for="gpsLat">GPS Latitude</label>
+      <input type="number" step="any" id="gpsLat" placeholder="e.g., 40.7128">
+      
+      <label for="gpsLong">GPS Longitude</label>
+      <input type="number" step="any" id="gpsLong" placeholder="e.g., -74.0060">
+      
+      <div style="display: flex; justify-content: space-between;">
+        <button class="submit-btn" id="submitUpload">Submit</button>
+        <button class="cancel-btn" id="cancelUpload">Cancel</button>
+      </div>
+    </div>
+
+    <script>
+      // Our Cognito configuration
+      var poolData = {
+        UserPoolId: "${user_pool_id}",
+        ClientId: "${client_id}"
+      };
+      
+      var userPool = new AmazonCognitoIdentity.CognitoUserPool(poolData);
+      
+      // Global variables for storing token and username after login.
+      window.cognitoAccessToken = null;
+      window.cognitoUsername = null;
+      
+      // Toggle password visibility when the eye icon is clicked
+      document.getElementById('togglePassword').addEventListener('click', function() {
+        var passwordField = document.getElementById('password');
+        if (passwordField.type === 'password') {
+          passwordField.type = 'text';
+          this.style.fill = "#007BFF"; // Change icon color when visible
+        } else {
+          passwordField.type = 'password';
+          this.style.fill = "#888";
+        }
+      });
+      
+      // Helper: Convert EXIF GPS array (in [degrees, minutes, seconds]) and reference to decimal
+      function convertDMSToDecimal(dms, ref) {
+        if (!dms) return null;
+        var degrees = dms[0];
+        var minutes = dms[1];
+        var seconds = dms[2];
+        var decimal = degrees + minutes/60 + seconds/3600;
+        if(ref === "S" || ref === "W") {
+          decimal = decimal * -1;
+        }
+        return decimal;
+      }
+      
+      // When a file is selected, extract EXIF data and auto-populate fields.
+      document.getElementById('uploadFile').addEventListener('change', function() {
+        var file = this.files[0];
+        if (!file) return;
+        
+        // Use exif-js to extract data from the file.
+        EXIF.getData(file, function() {
+          var exifData = EXIF.getAllTags(this);
+          console.log("EXIF data:", exifData);
+          
+          // Extract DateTimeOriginal. Format expected: "YYYY:MM:DD HH:MM:SS"
+          var dateTakenRaw = exifData.DateTimeOriginal;
+          if(dateTakenRaw) {
+            var parts = dateTakenRaw.split(" ");
+            if(parts.length === 2) {
+              var datePart = parts[0].replace(/:/g, "-"); // Convert to "YYYY-MM-DD"
+              document.getElementById('dateTaken').value = datePart;
+            }
+          }
+          
+          // Extract GPS data
+          var gpsLatArray = exifData.GPSLatitude;
+          var gpsLatRef = exifData.GPSLatitudeRef;
+          var gpsLongArray = exifData.GPSLongitude;
+          var gpsLongRef = exifData.GPSLongitudeRef;
+          if(gpsLatArray && gpsLatRef) {
+            var latDecimal = convertDMSToDecimal(gpsLatArray, gpsLatRef);
+            document.getElementById('gpsLat').value = latDecimal;
+          }
+          if(gpsLongArray && gpsLongRef) {
+            var longDecimal = convertDMSToDecimal(gpsLongArray, gpsLongRef);
+            document.getElementById('gpsLong').value = longDecimal;
+          }
+        });
+      });
+      
+      // Function to show spinner
+      function showSpinner() {
+        document.getElementById('spinner').style.display = 'block';
+      }
+      
+      // Function to hide spinner
+      function hideSpinner() {
+        document.getElementById('spinner').style.display = 'none';
+      }
+      
+      // Function to fetch and load content into the iframe
+      async function fetchAndLoadContent() {
+        if (!window.cognitoAccessToken) {
+          alert('User is not authenticated!');
+          return;
+        }
+        try {
+          const response = await fetch("${api_gw_fetch_object_url}", {
+            method: 'GET',
+            headers: {
+              'Authorization': 'Bearer ' + window.cognitoAccessToken
+            }
+          });
+          if (!response.ok) {
+            throw new Error('HTTP error ' + response.status);
+          }
+          const html = await response.text();
+          document.getElementById('contentFrame').srcdoc = html;
+        } catch (error) {
+          console.error("Error fetching content:", error);
+          alert('Error fetching content. See console for details.');
+        }
+      }
+      
+      // Handle login button click to authenticate the user
+      document.getElementById('loginBtn').addEventListener('click', function() {
+        var usernameField = document.getElementById('username');
+        var passwordField = document.getElementById('password');
+        var errorMsg = document.getElementById('errorMsg');
+        
+        var username = usernameField.value;
+        var password = passwordField.value;
+        
+        var authenticationDetails = new AmazonCognitoIdentity.AuthenticationDetails({
+          Username: username,
+          Password: password,
+        });
+        
+        var userData = {
+          Username: username,
+          Pool: userPool
+        };
+        
+        var cognitoUser = new AmazonCognitoIdentity.CognitoUser(userData);
+        
+        cognitoUser.authenticateUser(authenticationDetails, {
+          onSuccess: function(result) {
+            console.log('Access token: ' + result.getAccessToken().getJwtToken());
+            document.getElementById('loginContainer').style.display = 'none';
+            document.getElementById('navButtons').style.display = 'block';
+            errorMsg.textContent = "";
+            window.cognitoAccessToken = result.getAccessToken().getJwtToken();
+            window.cognitoUsername = username;
+            fetchAndLoadContent();
+          },
+          onFailure: function(err) {
+            errorMsg.textContent = "Incorrect username or password";
+            usernameField.value = "";
+            passwordField.value = "";
+          },
+        });
+      });
+      
+      // Logout button clears token and reloads the page
+      document.getElementById('logoutBtn').addEventListener('click', function() {
+        window.cognitoAccessToken = null;
+        window.cognitoUsername = null;
+        location.reload();
+      });
+      
+      // Show the upload form modal when Upload Photos is clicked
+      document.getElementById('uploadBtn').addEventListener('click', function() {
+        document.getElementById('modalOverlay').style.display = 'block';
+        document.getElementById('uploadForm').style.display = 'block';
+      });
+      
+      // Cancel upload and hide the modal
+      document.getElementById('cancelUpload').addEventListener('click', function() {
+        document.getElementById('uploadForm').style.display = 'none';
+        document.getElementById('modalOverlay').style.display = 'none';
+        clearUploadForm();
+      });
+      
+      // Submit the upload form
+      document.getElementById('submitUpload').addEventListener('click', async function() {
+        // Immediately close the upload modal and overlay.
+        document.getElementById('uploadForm').style.display = 'none';
+        document.getElementById('modalOverlay').style.display = 'none';
+        // Show the spinner.
+        showSpinner();
+        
+        var fileInput = document.getElementById('uploadFile');
+        var dateTaken = document.getElementById('dateTaken').value;
+        var gpsLat = document.getElementById('gpsLat').value;
+        var gpsLong = document.getElementById('gpsLong').value;
+        
+        if (fileInput.files.length === 0) {
+          alert('Please select a file to upload.');
+          hideSpinner();
+          return;
+        }
+        
+        var file = fileInput.files[0];
+        var filename = file.name;
+        var contentType = file.type;
+        
+        // Read file as base64
+        var reader = new FileReader();
+        reader.onload = async function(e) {
+          var fileContent = e.target.result.split(',')[1]; // remove data:*/*;base64, prefix
+          
+          // Build payload for upload API, including content_type.
+          var payload = {
+            filename: filename,
+            username: window.cognitoUsername,
+            date_taken: dateTaken,
+            gps_lat: gpsLat,
+            gps_long: gpsLong,
+            file_content: fileContent,
+            content_type: contentType
+          };
+          
+          try {
+            const uploadResponse = await fetch("${api_gw_upload_photo_url}", {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + window.cognitoAccessToken
+              },
+              body: JSON.stringify(payload)
+            });
+            if (!uploadResponse.ok) {
+              throw new Error('Upload failed with status ' + uploadResponse.status);
+            }
+            const uploadData = await uploadResponse.json();
+            alert(uploadData.message || 'Upload successful!');
+            
+            // After successful upload, automatically regenerate the map
+            const regenResponse = await fetch("${api_gw_regenerate_map_url}", {
+              method: 'POST',
+              headers: {
+                'Authorization': 'Bearer ' + window.cognitoAccessToken
+              }
+            });
+            if (!regenResponse.ok) {
+              throw new Error('Map regeneration failed with status ' + regenResponse.status);
+            }
+            const regenData = await regenResponse.json();
+            alert(regenData.message || 'Map regenerated successfully!');
+            
+            // Refresh the iframe content to show the updated map.
+            fetchAndLoadContent();
+            
+            // Clear the upload form for next time.
+            clearUploadForm();
+          } catch (error) {
+            console.error("Upload error:", error);
+            alert('Error uploading file. See console for details.');
+          } finally {
+            // Hide spinner once done.
+            hideSpinner();
+          }
+        };
+        reader.readAsDataURL(file);
+      });
+
+      // Handle regenerate map button
+      document.getElementById('regenBtn').addEventListener('click', async function() {
+        showSpinner(); // Show the spinner immediately
+        try {
+          const regenResponse = await fetch("${api_gw_regenerate_map_url}", {
+            method: 'POST',
+            headers: {
+              'Authorization': 'Bearer ' + window.cognitoAccessToken
+            }
+          });
+          if (!regenResponse.ok) {
+            throw new Error('Map regeneration failed with status ' + regenResponse.status);
+          }
+          const regenData = await regenResponse.json();
+          alert(regenData.message || 'Map regenerated successfully!');
+          
+          // Refresh the iframe content to show the updated map.
+          fetchAndLoadContent();
+        } catch (error) {
+          console.error("Regenerate error:", error);
+          alert('Error regenerating map. See console for details.');
+        } finally {
+          hideSpinner(); // Hide the spinner once processing is done
+        }
+      });
+      
+      // Utility to clear upload form inputs
+      function clearUploadForm() {
+        document.getElementById('uploadFile').value = "";
+        document.getElementById('dateTaken').value = "";
+        document.getElementById('gpsLat').value = "";
+        document.getElementById('gpsLong').value = "";
+      }
+    </script>
+  </body>
+</html>
